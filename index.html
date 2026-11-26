@@ -463,7 +463,7 @@
             <div class="overlay show" id="startOverlay">
               <h1>オーダーブロック<br />・ファースト</h1>
               <p class="center" style="text-align:center">落ちてくる <b>[数字][記号][数字]</b> を積んで、<br />1行の式（5マス）をそろえる入門パズルです。</p>
-              <p class="clear-rule"><b>行の式（5マス）が全部埋まり、計算結果がターゲットと一致したら、その行が消える</b><br />ターゲットは、実際に作れる式の答えから選ばれるので、必ずたどり着けます。</p>
+              <p class="clear-rule"><b>行の式（5マス）が全部埋まり、計算結果がターゲットと一致したら、その行が消える</b><br />ターゲットは、実際に作れる式（お手本）の答えから選ばれ、その式を作るピースが数ピースに1回は必ず落ちてきます。途中で違うタイルを置いても、お手本は置いたタイルに合わせて組み直されます。</p>
               <p>盤面は横6列。1・3・5列目は数字専用、2・4列目は記号専用、6列目はいつも「＝」で、どの行も必ず <b>数字・記号・数字・記号・数字 ＝</b> の正しい式になります。着地したタイルは列ごとに一番下まで沈むので、埋められない穴はできません。</p>
               <p><b>3行消すごとにステージアップ！</b> どのステージからでも始められます。</p>
               <div class="stage-cards">
@@ -602,6 +602,7 @@
       var dropAcc = 0, lastTime = 0, softDrop = false;
       var evalRowIdx = -1;
       var settleTiles = null; // [{tile,c,r}] during per-column sink animation
+      var piecesSinceModel = 0; // random pieces dropped since the last model-expression piece
 
       var $ = function (id) { return document.getElementById(id); };
       var boardEl = $("board"), tokensEl = $("tokens");
@@ -766,6 +767,128 @@
         return rat(9);
       }
 
+      /* ================= model-expression maintenance =================
+         `solution` is the one fixed model expression whose value is the
+         target. Falling pieces are built from its two 3-tile windows, and
+         whenever the tiles the player has actually placed in the row now
+         being built no longer fit the model, a new model is searched:
+         first with the same target value, and only if that is impossible
+         is the target itself moved to a value the current row can reach. */
+      function valueInTargetRange(v) {
+        if (stage === 1) return v.d === 1 && v.n >= 1 && v.n <= 25;
+        if (stage === 2) return v.d === 1 && v.n >= 1 && v.n <= 40;
+        return v.d <= 6 && v.n >= 0 && v.n <= 30 * v.d;
+      }
+      function columnHeights() {
+        var hs = [];
+        for (var c = 0; c < EXPR_COLS; c++) {
+          var h = 0;
+          for (var r = ROWS - 1; r >= 0; r--) { if (board[r][c]) h++; else break; }
+          hs.push(h);
+        }
+        return hs;
+      }
+      // The row currently being built is the lowest row that is not full
+      // yet; the tiles already sitting in it are fixed constraints.
+      function rowInProgress() {
+        var hs = columnHeights();
+        var minH = Math.min.apply(null, hs);
+        var r = ROWS - 1 - minH;
+        if (r < 0) return null;
+        var fixed = [];
+        for (var c = 0; c < EXPR_COLS; c++) fixed.push(hs[c] > minH ? board[r][c] : null);
+        return { row: r, fixed: fixed };
+      }
+      function tokenMatchesTile(tok, tile) {
+        if (!tile) return true;
+        if (tile.stone) return false;
+        if (tok.kind !== tile.kind) return false;
+        if (tok.kind === "op") return tok.op === tile.op;
+        return rEq(tok.val, tile.val);
+      }
+      function exprMatchesFixed(toks, fixed) {
+        for (var i = 0; i < EXPR_COLS; i++) if (!tokenMatchesTile(toks[i], fixed[i])) return false;
+        return true;
+      }
+      function randNumVal() {
+        if (stage === 3 && Math.random() < 0.42) { var f = pick(FRACS); return rat(f.n, f.d); }
+        if (stage === 2) { var pool = [1,2,2,3,3,4,4,5,6,6,7,8,9]; return rat(pick(pool)); }
+        return rat(1 + Math.floor(Math.random() * 9));
+      }
+      // Build an expression around the tiles already placed: fixed slots
+      // are copied verbatim, empty slots are filled from stage materials,
+      // so the result is consistent with the row by construction.
+      function completeExpr(fixed) {
+        var toks = [];
+        for (var i = 0; i < EXPR_COLS; i++) {
+          var t = fixed[i];
+          if (t) toks.push(t.kind === "op" ? { kind: "op", op: t.op } : { kind: "num", val: rat(t.val.n, t.val.d) });
+          else if (i % 2 === 1) toks.push({ kind: "op", op: pick(stageOps()) });
+          else toks.push({ kind: "num", val: randNumVal() });
+        }
+        return toks;
+      }
+      function findModelFor(val, fixed) {
+        var a, toks, v;
+        for (a = 0; a < 400; a++) {
+          toks = buildExpr();
+          v = evalTokens(toks, stage === 2);
+          if (v === null || !rEq(v, val)) continue;
+          if (!exprMatchesFixed(toks, fixed)) continue;
+          return toks;
+        }
+        for (a = 0; a < 600; a++) {
+          toks = completeExpr(fixed);
+          v = evalTokens(toks, stage === 2);
+          if (v === null || !rEq(v, val)) continue;
+          return toks;
+        }
+        return null;
+      }
+      function findAnyModel(fixed) {
+        var a, toks, v;
+        for (a = 0; a < 400; a++) {
+          toks = buildExpr();
+          v = evalTokens(toks, stage === 2);
+          if (v === null || !valueInTargetRange(v)) continue;
+          if (!exprMatchesFixed(toks, fixed)) continue;
+          return { toks: toks, val: v };
+        }
+        var fallback = null;
+        for (a = 0; a < 200; a++) {
+          toks = completeExpr(fixed);
+          v = evalTokens(toks, stage === 2);
+          if (v !== null && valueInTargetRange(v)) return { toks: toks, val: v };
+          if (fallback === null) {
+            var v2 = evalTokens(toks, false);
+            if (v2 !== null) fallback = { toks: toks, val: v2 };
+          }
+        }
+        return fallback;
+      }
+      function maintainModel() {
+        if (!solution || !board) return;
+        var rp = rowInProgress();
+        if (!rp) return;
+        if (exprMatchesFixed(solution, rp.fixed)) return; // model still fits the row
+        var m = findModelFor(target, rp.fixed);
+        if (m) {
+          solution = m;
+          nextPiece = modelPiece(); piecesSinceModel = 0;
+          setLog("置いたタイルに合わせて、お手本の式を組み直しました（ターゲット " + ratText(target) + " はそのまま）。次のピースからお手本ピースが落ちてきます。");
+          render();
+          return;
+        }
+        var any = findAnyModel(rp.fixed);
+        if (any) {
+          solution = any.toks;
+          target = any.val;
+          nextPiece = modelPiece(); piecesSinceModel = 0;
+          setLog('いまの行では前のターゲットに届かないので、<span class="good">ターゲットを ' + ratText(target) + ' に変えました</span>。いま入っているタイルから作れる値です。お手本ピースが落ちてきます。');
+          render();
+        }
+      }
+
       /* ================= tiles & pieces ================= */
       function stageOps() {
         if (stage === 1) return ["+", "+", "−", "−"];
@@ -797,7 +920,26 @@
         }
         return { kind: "op", op: pick(stageOps()) };
       }
-      function makePiece() { return [randNumTile(), randOpTile(), randNumTile()]; }
+      function tokenToTile(t) {
+        if (t.kind === "op") return { kind: "op", op: t.op };
+        return { kind: "num", val: rat(t.val.n, t.val.d), isFrac: t.val.d !== 1 };
+      }
+      // One of the two 3-tile windows of the model expression
+      // [n1][o1][n2][o2][n3] : [n1][o1][n2] or [n2][o2][n3].
+      function modelPiece() {
+        var s = Math.random() < 0.5 ? 0 : 2;
+        return [tokenToTile(solution[s]), tokenToTile(solution[s + 1]), tokenToTile(solution[s + 2])];
+      }
+      function makePiece() {
+        // Model pieces fall often: at least one in every 3 pieces, so the
+        // tiles that build the target expression always keep coming.
+        if (solution && (piecesSinceModel >= 2 || Math.random() < 0.45)) {
+          piecesSinceModel = 0;
+          return modelPiece();
+        }
+        piecesSinceModel++;
+        return [randNumTile(), randOpTile(), randNumTile()];
+      }
 
       function tileClass(t, extra) {
         var cls = extra || "";
@@ -936,6 +1078,7 @@
         newBoard();
         score = 0; lines = 0; combo = 0;
         linesInStage = 0;
+        piecesSinceModel = 0;
         target = makeTarget();
         nextPiece = makePiece();
         piece = null; evalRowIdx = -1;
@@ -943,7 +1086,7 @@
         setCalcMsg("行の式（5マス）をそろえると、ここで計算が再生されます", "");
         hideResultBanner();
         tokensEl.innerHTML = "";
-        setLog("ターゲットと同じ答えの行を作ろう！ 落ちてくるタイルは、ターゲットの式に使う数字・記号が多めに出ます。");
+        setLog("ターゲットと同じ答えの行を作ろう！ お手本の式を作るピースが、数ピースに1回は必ず落ちてきます。");
         render();
       }
       function startGame(fromStage) {
@@ -1031,6 +1174,7 @@
           render();
           await processRows();
           if (state === "over") return;
+          maintainModel(); // re-fit the model expression to the tiles now in the row being built
           for (var c2 = 0; c2 < EXPR_COLS; c2++) {
             if (board[0][c2]) { gameOver(); return; }
           }
@@ -1174,6 +1318,7 @@
           await waitContinue();
           exitFocusMode();
           stoneRow(r);
+          target = makeTarget(); // 石化したら、次のターゲットとお手本の式を決め直す
           evalRowIdx = -1;
           render();
           return;
@@ -1295,6 +1440,7 @@
           await waitContinue(); // result screen holds until つづける
           exitFocusMode();
           stoneRow(r);
+          target = makeTarget(); // 石化したら、次のターゲットとお手本の式を決め直す
           evalRowIdx = -1;
           render();
         }
