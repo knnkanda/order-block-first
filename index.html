@@ -463,7 +463,7 @@
             <div class="overlay show" id="startOverlay">
               <h1>オーダーブロック<br />・ファースト</h1>
               <p class="center" style="text-align:center">落ちてくる <b>[数字][記号][数字]</b> を積んで、<br />1行の式（5マス）をそろえる入門パズルです。</p>
-              <p class="clear-rule"><b>行の式（5マス）が全部埋まり、計算結果がターゲットと一致したら、その行が消える</b><br />ターゲットは、実際に作れる式（お手本）の答えから選ばれ、その式を作るピースが数ピースに1回は必ず落ちてきます。途中で違うタイルを置いても、お手本は置いたタイルに合わせて組み直されます。</p>
+              <p class="clear-rule"><b>行の式（5マス）が全部埋まり、計算結果がターゲットと一致したら、その行が消える</b><br />ターゲットは、実際に作れる式（お手本）の答えから選ばれます。新しいターゲットが決まると、最初に お手本の式の前半ピースと後半ピースが続けて落ちてきます ― この2ピースだけで行が完成できます。その後も、お手本ピースが3ピース中2ピース以上のペースで落ちてきます。途中で違うタイルを置いても、お手本は置いたタイルに合わせて組み直され、次は新しいお手本ピースが落ちてきます。</p>
               <p>盤面は横6列。1・3・5列目は数字専用、2・4列目は記号専用、6列目はいつも「＝」で、どの行も必ず <b>数字・記号・数字・記号・数字 ＝</b> の正しい式になります。着地したタイルは列ごとに一番下まで沈むので、埋められない穴はできません。</p>
               <p><b>3行消すごとにステージアップ！</b> どのステージからでも始められます。</p>
               <div class="stage-cards">
@@ -602,7 +602,8 @@
       var dropAcc = 0, lastTime = 0, softDrop = false;
       var evalRowIdx = -1;
       var settleTiles = null; // [{tile,c,r}] during per-column sink animation
-      var piecesSinceModel = 0; // random pieces dropped since the last model-expression piece
+      var pieceQueue = []; // model pieces scheduled to fall next (the fresh A/B pair after a new target)
+      var cyclePos = 0; // position in the repeating model, model, random cycle once the queue is empty
 
       var $ = function (id) { return document.getElementById(id); };
       var boardEl = $("board"), tokensEl = $("tokens");
@@ -874,7 +875,7 @@
         var m = findModelFor(target, rp.fixed);
         if (m) {
           solution = m;
-          nextPiece = modelPiece(); piecesSinceModel = 0;
+          scheduleFreshModel();
           setLog("置いたタイルに合わせて、お手本の式を組み直しました（ターゲット " + ratText(target) + " はそのまま）。次のピースからお手本ピースが落ちてきます。");
           render();
           return;
@@ -883,7 +884,7 @@
         if (any) {
           solution = any.toks;
           target = any.val;
-          nextPiece = modelPiece(); piecesSinceModel = 0;
+          scheduleFreshModel();
           setLog('いまの行では前のターゲットに届かないので、<span class="good">ターゲットを ' + ratText(target) + ' に変えました</span>。いま入っているタイルから作れる値です。お手本ピースが落ちてきます。');
           render();
         }
@@ -924,21 +925,44 @@
         if (t.kind === "op") return { kind: "op", op: t.op };
         return { kind: "num", val: rat(t.val.n, t.val.d), isFrac: t.val.d !== 1 };
       }
-      // One of the two 3-tile windows of the model expression
-      // [n1][o1][n2][o2][n3] : [n1][o1][n2] or [n2][o2][n3].
-      function modelPiece() {
-        var s = Math.random() < 0.5 ? 0 : 2;
-        return [tokenToTile(solution[s]), tokenToTile(solution[s + 1]), tokenToTile(solution[s + 2])];
+      // The two 3-tile windows of the model expression
+      // [n1][o1][n2][o2][n3] : A = [n1][o1][n2] and B = [n2][o2][n3].
+      // Placed one at x=0 and the other at x=2 (in either order), the pair
+      // alone completes the bottom row: the shared middle number stacks
+      // harmlessly on top of itself thanks to the per-column sink.
+      function modelWindows() {
+        return [
+          [tokenToTile(solution[0]), tokenToTile(solution[1]), tokenToTile(solution[2])],
+          [tokenToTile(solution[2]), tokenToTile(solution[3]), tokenToTile(solution[4])]
+        ];
       }
-      function makePiece() {
-        // Model pieces fall often: at least one in every 3 pieces, so the
-        // tiles that build the target expression always keep coming.
-        if (solution && (piecesSinceModel >= 2 || Math.random() < 0.45)) {
-          piecesSinceModel = 0;
-          return modelPiece();
-        }
-        piecesSinceModel++;
+      function modelPiece() {
+        var w = modelWindows();
+        return Math.random() < 0.5 ? w[0] : w[1];
+      }
+      function randomPiece() {
         return [randNumTile(), randOpTile(), randNumTile()];
+      }
+      // Called every time a new target + model expression is decided, and
+      // whenever the model is re-fit to the tiles already placed: the next
+      // two pieces to fall are the model's windows A and B (random order),
+      // so the row can be completed with just those two pieces. After the
+      // pair, the pattern model, model, random repeats, which keeps model
+      // pieces at 2/3 or more of everything that falls.
+      function scheduleFreshModel() {
+        var w = modelWindows();
+        if (Math.random() < 0.5) w.reverse();
+        pieceQueue = w;
+        cyclePos = 0;
+        nextPiece = pieceQueue.shift();
+      }
+      function nextScheduledPiece() {
+        if (pieceQueue.length) return pieceQueue.shift();
+        if (!solution) return randomPiece();
+        cyclePos++;
+        if (cyclePos <= 2) return modelPiece();
+        cyclePos = 0;
+        return randomPiece();
       }
 
       function tileClass(t, extra) {
@@ -1078,15 +1102,14 @@
         newBoard();
         score = 0; lines = 0; combo = 0;
         linesInStage = 0;
-        piecesSinceModel = 0;
         target = makeTarget();
-        nextPiece = makePiece();
+        scheduleFreshModel(); // first two pieces are the model's windows A and B
         piece = null; evalRowIdx = -1;
         setPhase("待機中", "");
         setCalcMsg("行の式（5マス）をそろえると、ここで計算が再生されます", "");
         hideResultBanner();
         tokensEl.innerHTML = "";
-        setLog("ターゲットと同じ答えの行を作ろう！ お手本の式を作るピースが、数ピースに1回は必ず落ちてきます。");
+        setLog("ターゲットと同じ答えの行を作ろう！ 最初の2ピースはお手本の式の前半・後半 ― その2つだけで1行そろえられます。");
         render();
       }
       function startGame(fromStage) {
@@ -1100,7 +1123,7 @@
       }
       function spawnPiece() {
         piece = { tiles: nextPiece, x: 0, y: 0 }; // left edge only on odd columns (0,2 zero-based)
-        nextPiece = makePiece();
+        nextPiece = nextScheduledPiece();
         for (var i = 0; i < 3; i++) {
           if (board[0][piece.x + i]) { gameOver(); return; }
         }
@@ -1319,6 +1342,7 @@
           exitFocusMode();
           stoneRow(r);
           target = makeTarget(); // 石化したら、次のターゲットとお手本の式を決め直す
+          scheduleFreshModel();
           evalRowIdx = -1;
           render();
           return;
@@ -1423,11 +1447,13 @@
             stage++;
             linesInStage = 0;
             target = makeTarget();
+            scheduleFreshModel();
             render();
             await waitStageUp(); // banner holds until すすむ is pressed
             setLog('<span class="good">ステージ' + stage + "「" + STAGE_NAMES[stage] + '」スタート！</span> 新しいターゲットは ' + ratText(target) + " です。");
           } else {
             target = makeTarget();
+            scheduleFreshModel();
           }
           render();
         } else {
@@ -1441,6 +1467,7 @@
           exitFocusMode();
           stoneRow(r);
           target = makeTarget(); // 石化したら、次のターゲットとお手本の式を決め直す
+          scheduleFreshModel();
           evalRowIdx = -1;
           render();
         }
