@@ -465,26 +465,26 @@
               <p class="center" style="text-align:center">落ちてくる <b>[数字][記号][数字]</b> を積んで、<br />1行の式（5マス）をそろえる入門パズルです。</p>
               <p class="clear-rule"><b>行の式（5マス）が全部埋まり、計算結果がターゲットと一致したら、その行が消える</b><br />ターゲットは、実際に作れる式（お手本）の答えから選ばれます。新しいターゲットが決まると、最初に お手本の式の前半ピースと後半ピースが続けて落ちてきます ― この2ピースだけで行が完成できます。その後も、お手本ピースが3ピース中2ピース以上のペースで落ちてきます。途中で違うタイルを置いても、お手本は置いたタイルに合わせて組み直され、次は新しいお手本ピースが落ちてきます。</p>
               <p>盤面は横6列。1・3・5列目は数字専用、2・4列目は記号専用、6列目はいつも「＝」で、どの行も必ず <b>数字・記号・数字・記号・数字 ＝</b> の正しい式になります。着地したタイルは列ごとに一番下まで沈むので、埋められない穴はできません。</p>
-              <p><b>3行消すごとにステージアップ！</b> どのステージからでも始められます。</p>
+              <p><b>3行消すごとにステージアップ！</b> どのステージからでも始められます。<br /><b>各ステージの最初はいちばん ゆっくり＆いちばん簡単</b>です。ステージ1の最初のターゲットは小さな数のたし算だけ（答えは10まで）、ステージ2は割り切れる簡単なかけ算、ステージ3は 1/2・1/3 など分母の小さい分数から。行を消すごとに、落下が少しずつ速くなり、数字や分数の幅も少しずつ広がります。ステージが上がった直後も、また ゆっくり・簡単に もどるので、いきなり難しくなりません。最初の1行は、お手本ピース2つだけで完成できます。</p>
               <div class="stage-cards">
                 <div class="stage-card sc1">
                   <div class="sc-body">
                     <div class="sc-name">ステージ1　たし算・ひき算</div>
-                    <div class="sc-desc">記号は ＋ と − だけ。数字は1〜9。左から順に計算すればOK。</div>
+                    <div class="sc-desc">最初は ＋ だけ・数字は1〜4・答えは10まで。消すごとに数字が1〜6、1〜9へ広がり、− も登場します。</div>
                   </div>
                   <button class="sc-btn stage-start" type="button" data-stage="1">ここから ▶</button>
                 </div>
                 <div class="stage-card sc2">
                   <div class="sc-body">
                     <div class="sc-name">ステージ2　かけ算・わり算 登場</div>
-                    <div class="sc-desc">× と ÷ が加わります。PEMDAS：×÷は＋−より先に、左から計算。</div>
+                    <div class="sc-desc">最初は1〜4の簡単な × から。次に割り切れる ÷ が登場し、数字も広がります。PEMDAS：×÷は＋−より先に、左から計算。</div>
                   </div>
                   <button class="sc-btn stage-start" type="button" data-stage="2">ここから ▶</button>
                 </div>
                 <div class="stage-card sc3">
                   <div class="sc-body">
                     <div class="sc-name">ステージ3　分数 登場</div>
-                    <div class="sc-desc">数字に分数が混ざります。÷のうしろが分数なら KCF（Keep・Change・Flip）！</div>
+                    <div class="sc-desc">最初は 1/2・1/3・2/3 だけ。消すごとに分母4などの分数が増えます。÷のうしろが分数なら KCF（Keep・Change・Flip）！</div>
                   </div>
                   <button class="sc-btn stage-start" type="button" data-stage="3">ここから ▶</button>
                 </div>
@@ -713,38 +713,74 @@
          current stage's tile materials, so it can always be reached.
          The source expression is kept in `solution` and falling pieces are
          biased toward its tiles, so the needed numbers/ops actually appear. */
+      /* ===== gradual difficulty =====
+         matTier() is 0 at the very start of a stage (easiest materials,
+         smallest results) and grows by 1 for each line cleared in that
+         stage, capped at 2 for materials (full range). linesInStage is
+         reset to 0 on every stage-up, so a new stage always starts easy
+         and slow again — never a sudden jump. */
+      function matTier() { return Math.min(linesInStage || 0, 2); }
+      function stage1MaxNum() { var t = matTier(); return t === 0 ? 4 : (t === 1 ? 6 : 9); }
+      function stage2Pool() {
+        var t = matTier();
+        if (t === 0) return [1, 2, 2, 3, 3, 4];
+        if (t === 1) return [1, 2, 3, 4, 5, 6];
+        return [1, 2, 2, 3, 3, 4, 4, 5, 6, 6, 7, 8, 9];
+      }
+      function stage3FracPool() {
+        var t = matTier();
+        if (t === 0) return [rat(1, 2), rat(1, 3), rat(2, 3)];
+        if (t === 1) return [rat(1, 2), rat(1, 3), rat(2, 3), rat(1, 4), rat(3, 4), rat(3, 2)];
+        return FRACS;
+      }
+      function stage3MaxNum() { var t = matTier(); return t === 0 ? 5 : (t === 1 ? 7 : 9); }
+      function stage3FracChance() { var t = matTier(); return t === 0 ? 0.30 : (t === 1 ? 0.36 : 0.42); }
+
       function buildExpr() {
         var toks = [], k, nv;
+        var tier = matTier();
         if (stage === 1) {
+          // tier0: たし算だけ・1〜4・答えも小さい / tier1: 1〜6で − が少し / tier2: 1〜9フル
+          var max1 = stage1MaxNum();
+          var ops1 = tier === 0 ? ["+"] : ["+", "+", "−"];
           for (k = 0; k < 3; k++) {
-            toks.push({ kind: "num", val: rat(1 + Math.floor(Math.random() * 9)) });
-            if (k < 2) toks.push({ kind: "op", op: pick(["+", "+", "−"]) });
+            toks.push({ kind: "num", val: rat(1 + Math.floor(Math.random() * max1)) });
+            if (k < 2) toks.push({ kind: "op", op: pick(ops1) });
           }
           return toks;
         }
         if (stage === 2) {
-          var pool = [1,2,2,3,3,4,4,5,6,6,7,8,9];
+          // tier0: 1〜4・＋と×だけ（割り切れる簡単な×中心、÷はまだ出さない）
+          // tier1: 1〜6・÷が登場（割り切れるものだけ採用） / tier2: 1〜9フル
+          var pool = stage2Pool();
+          var ops2 = tier === 0 ? ["+", "×", "×"] : (tier === 1 ? ["+", "−", "×", "÷"] : ["+", "−", "×", "×", "÷"]);
           for (k = 0; k < 3; k++) {
             toks.push({ kind: "num", val: rat(pick(pool)) });
-            if (k < 2) toks.push({ kind: "op", op: pick(["+", "−", "×", "×", "÷"]) });
+            if (k < 2) toks.push({ kind: "op", op: pick(ops2) });
           }
+          // tier0 は × を1つは含める（かけ算の成功体験から始める）
+          if (tier === 0 && toks[1].op !== "×" && toks[3].op !== "×") toks[1] = { kind: "op", op: "×" };
           return toks;
         }
         // stage 3: fractions mixed in; half the time force a ÷ fraction (KCF)
-        var forceKcf = Math.random() < 0.5;
+        // tier0: 分母2〜3の分数だけ（1/2, 1/3, 2/3）・数字は1〜5
+        // tier1: 分母4まで追加 / tier2: 分数フル
+        var fracPool = stage3FracPool();
+        var max3 = stage3MaxNum();
+        var forceKcf = Math.random() < (tier === 0 ? 0.6 : 0.5);
         var divPos = Math.random() < 0.5 ? 1 : 3; // token index of the ÷
         for (k = 0; k < 3; k++) {
-          if (Math.random() < 0.42) {
-            var f = pick(FRACS);
+          if (Math.random() < stage3FracChance()) {
+            var f = pick(fracPool);
             toks.push({ kind: "num", val: rat(f.n, f.d) });
           } else {
-            toks.push({ kind: "num", val: rat(1 + Math.floor(Math.random() * 9)) });
+            toks.push({ kind: "num", val: rat(1 + Math.floor(Math.random() * max3)) });
           }
-          if (k < 2) toks.push({ kind: "op", op: pick(["+", "−", "×", "÷", "÷"]) });
+          if (k < 2) toks.push({ kind: "op", op: pick(tier === 0 ? ["+", "×", "÷", "÷"] : ["+", "−", "×", "÷", "÷"]) });
         }
         if (forceKcf) {
           toks[divPos] = { kind: "op", op: "÷" };
-          var f2 = pick(FRACS);
+          var f2 = pick(fracPool);
           toks[divPos + 1] = { kind: "num", val: rat(f2.n, f2.d) };
         }
         return toks;
@@ -754,9 +790,14 @@
           var toks = buildExpr();
           var v = evalTokens(toks, stage === 2);
           if (v === null) continue;
-          if (stage === 1 && (v.d !== 1 || v.n < 1 || v.n > 25)) continue;
-          if (stage === 2 && (v.d !== 1 || v.n < 1 || v.n > 40)) continue;
-          if (stage === 3 && (v.d > 6 || v.n < 0 || v.n > 30 * v.d)) continue;
+          var tierM = matTier();
+          var maxRes1 = tierM === 0 ? 10 : (tierM === 1 ? 18 : 25);
+          var maxRes2 = tierM === 0 ? 20 : (tierM === 1 ? 30 : 40);
+          var maxRes3 = tierM === 0 ? 15 : (tierM === 1 ? 22 : 30);
+          var maxDen3 = tierM === 0 ? 3 : (tierM === 1 ? 4 : 6);
+          if (stage === 1 && (v.d !== 1 || v.n < 1 || v.n > maxRes1)) continue;
+          if (stage === 2 && (v.d !== 1 || v.n < 1 || v.n > maxRes2)) continue;
+          if (stage === 3 && (v.d > maxDen3 || v.n < 0 || v.n > maxRes3 * v.d)) continue;
           solution = toks;
           return v;
         }
@@ -776,9 +817,10 @@
          first with the same target value, and only if that is impossible
          is the target itself moved to a value the current row can reach. */
       function valueInTargetRange(v) {
-        if (stage === 1) return v.d === 1 && v.n >= 1 && v.n <= 25;
-        if (stage === 2) return v.d === 1 && v.n >= 1 && v.n <= 40;
-        return v.d <= 6 && v.n >= 0 && v.n <= 30 * v.d;
+        var t = matTier();
+        if (stage === 1) return v.d === 1 && v.n >= 1 && v.n <= (t === 0 ? 12 : (t === 1 ? 20 : 25));
+        if (stage === 2) return v.d === 1 && v.n >= 1 && v.n <= (t === 0 ? 24 : (t === 1 ? 32 : 40));
+        return v.d <= (t === 0 ? 4 : 6) && v.n >= 0 && v.n <= 30 * v.d;
       }
       function columnHeights() {
         var hs = [];
@@ -812,9 +854,10 @@
         return true;
       }
       function randNumVal() {
-        if (stage === 3 && Math.random() < 0.42) { var f = pick(FRACS); return rat(f.n, f.d); }
-        if (stage === 2) { var pool = [1,2,2,3,3,4,4,5,6,6,7,8,9]; return rat(pick(pool)); }
-        return rat(1 + Math.floor(Math.random() * 9));
+        if (stage === 3 && Math.random() < stage3FracChance()) { var f = pick(stage3FracPool()); return rat(f.n, f.d); }
+        if (stage === 3) return rat(1 + Math.floor(Math.random() * stage3MaxNum()));
+        if (stage === 2) { return rat(pick(stage2Pool())); }
+        return rat(1 + Math.floor(Math.random() * stage1MaxNum()));
       }
       // Build an expression around the tiles already placed: fixed slots
       // are copied verbatim, empty slots are filled from stage materials,
@@ -892,7 +935,10 @@
 
       /* ================= tiles & pieces ================= */
       function stageOps() {
-        if (stage === 1) return ["+", "+", "−", "−"];
+        var t = matTier();
+        if (stage === 1) return t === 0 ? ["+"] : ["+", "+", "−", "−"];
+        if (stage === 2 && t === 0) return ["+", "×", "×"];
+        if (stage === 3 && t === 0) return ["+", "×", "÷", "÷"];
         return ["+", "+", "−", "−", "×", "×", "÷", "÷"];
       }
       function randNumTile() {
@@ -903,14 +949,16 @@
           return { kind: "num", val: rat(sv.n, sv.d), isFrac: sv.d !== 1 };
         }
         if (stage === 3 && Math.random() < 0.30) {
-          var f = pick(FRACS);
+          var f = pick(stage3FracPool());
           return { kind: "num", val: rat(f.n, f.d), isFrac: true };
         }
-        if (stage === 2) {
-          var pool2 = [1,2,2,3,3,4,4,5,6,6,7,8,9];
-          return { kind: "num", val: rat(pick(pool2)), isFrac: false };
+        if (stage === 3) {
+          return { kind: "num", val: rat(1 + Math.floor(Math.random() * stage3MaxNum())), isFrac: false };
         }
-        return { kind: "num", val: rat(1 + Math.floor(Math.random() * 9)), isFrac: false };
+        if (stage === 2) {
+          return { kind: "num", val: rat(pick(stage2Pool())), isFrac: false };
+        }
+        return { kind: "num", val: rat(1 + Math.floor(Math.random() * stage1MaxNum())), isFrac: false };
       }
       function randOpTile() {
         if (solution && Math.random() < 0.38) {
@@ -1109,7 +1157,7 @@
         setCalcMsg("行の式（5マス）をそろえると、ここで計算が再生されます", "");
         hideResultBanner();
         tokensEl.innerHTML = "";
-        setLog("ターゲットと同じ答えの行を作ろう！ 最初の2ピースはお手本の式の前半・後半 ― その2つだけで1行そろえられます。");
+        setLog("ターゲットと同じ答えの行を作ろう！ いまはこのステージでいちばん ゆっくり＆簡単な入り口です。最初の2ピースはお手本の式の前半・後半 ― その2つだけで1行そろえられます。行を消すごとに少しずつ速く・少しずつ難しくなります。");
         render();
       }
       function startGame(fromStage) {
@@ -1475,9 +1523,18 @@
 
       /* ================= main loop ================= */
       function dropInterval() {
-        var base = stage === 1 ? 1150 : (stage === 2 ? 1000 : 900);
-        if (stage === 3) base = Math.max(480, 900 - Math.max(0, lines - LINES_PER_STAGE * 2) * 35);
-        return softDrop ? Math.min(60, base) : base;
+        // Slowest at the start of every stage; speeds up a little with
+        // each line cleared in that stage, with a floor (cap). Because
+        // linesInStage resets on stage-up, a new stage starts slow again.
+        // Stage1: 1550→1390→1230 (floor 980) / Stage2: 1480→1330→1180 (floor 920)
+        // Stage3: 1400→1290→1180→… (floor 560, keeps easing over many lines)
+        var start, step, floor;
+        if (stage === 1) { start = 1550; step = 160; floor = 980; }
+        else if (stage === 2) { start = 1480; step = 150; floor = 920; }
+        else { start = 1400; step = 110; floor = 560; }
+        var iv = start - (linesInStage || 0) * step;
+        if (iv < floor) iv = floor;
+        return softDrop ? Math.min(60, iv) : iv;
       }
       function loop(ts) {
         requestAnimationFrame(loop);
